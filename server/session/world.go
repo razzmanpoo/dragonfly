@@ -78,15 +78,17 @@ func (s *Session) ViewEntity(e world.Entity) {
 
 	id := e.H().Type().EncodeEntity()
 	switch v := e.(type) {
-	case Controllable:
+	case PlayerModel:
 		_, actualPlayer := sessions.Lookup(v.UUID())
+		buildPlatform := int32(protocol.DeviceUnknown)
 		if !actualPlayer {
+			buildPlatform = int32(protocol.DeviceDedicated)
 			s.writePacket(&packet.PlayerList{Entries: []protocol.PlayerListEntry{{
 				ActionType:     protocol.PlayerListActionAdd,
 				UUID:           v.UUID(),
 				EntityUniqueID: int64(runtimeID),
 				Username:       v.Name(),
-				BuildPlatform:  int32(protocol.DeviceUnknown),
+				BuildPlatform:  buildPlatform,
 				Skin:           skinToProtocol(v.Skin()),
 			}}})
 		}
@@ -101,7 +103,7 @@ func (s *Session) ViewEntity(e world.Entity) {
 			UUID:            v.UUID(),
 			Username:        v.Name(),
 			Yaw:             float32(yaw),
-			BuildPlatform:   int32(protocol.DeviceUnknown),
+			BuildPlatform:   buildPlatform,
 			AbilityData: protocol.AbilityData{
 				EntityUniqueID: int64(runtimeID),
 				Layers: []protocol.AbilityLayer{{
@@ -1023,6 +1025,9 @@ func (s *Session) ViewBlockUpdate(pos cube.Pos, b world.Block, layer int) {
 
 // ViewEntityAction ...
 func (s *Session) ViewEntityAction(e world.Entity, a world.EntityAction) {
+	if s.entityRuntimeID(e) == 0 {
+		return
+	}
 	switch act := a.(type) {
 	case entity.SwingArmAction:
 		if _, ok := e.(Controllable); ok {
@@ -1341,7 +1346,7 @@ func (s *Session) ViewEmote(player world.Entity, emote uuid.UUID) {
 
 // ViewSkin ...
 func (s *Session) ViewSkin(e world.Entity) {
-	if v, ok := e.(Controllable); ok {
+	if v, ok := e.(PlayerModel); ok {
 		s.writePacket(&packet.PlayerSkin{
 			UUID: v.UUID(),
 			Skin: skinToProtocol(v.Skin()),
@@ -1429,7 +1434,10 @@ func (s *Session) handleRuntimeID(e *world.EntityHandle) uint64 {
 	if id, ok := s.entityRuntimeIDs[e]; ok {
 		return id
 	}
-	s.conf.Log.Debug("entity runtime ID not found", "UUID", e.UUID().String())
+	// Entity visibility can change while a world transition is being
+	// processed. In that window a viewer may still receive an update for an
+	// entity whose runtime ID has already been removed. Treat it as invisible;
+	// logging here turns normal mining/animation races into console spam.
 	return 0
 }
 

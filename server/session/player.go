@@ -115,8 +115,6 @@ func (s *Session) sendRecipes() {
 	var (
 		shapedRecipes            []protocol.ShapedRecipe
 		shapelessRecipes         []protocol.ShapelessRecipe
-		userDataShapelessRecipes []protocol.UserDataShapelessRecipe
-		multiRecipes             []protocol.MultiRecipe
 		smithingTransformRecipes []protocol.SmithingTransformRecipe
 		smithingTrimRecipes      []protocol.SmithingTrimRecipe
 		potionRecipes            []protocol.PotionRecipe
@@ -137,20 +135,6 @@ func (s *Session) sendRecipes() {
 				Block:           i.Block(),
 				RecipeNetworkID: networkID,
 			})
-		case recipe.UserDataShapeless:
-			userDataShapelessRecipes = append(userDataShapelessRecipes, protocol.UserDataShapelessRecipe{ShapelessRecipe: protocol.ShapelessRecipe{
-				RecipeID:        uuid.New().String(),
-				Priority:        int32(i.Priority()),
-				Input:           stacksToIngredientItems(s.br, i.Input()),
-				Output:          stacksToRecipeStacks(s.br, i.Output()),
-				Block:           i.Block(),
-				RecipeNetworkID: networkID,
-			}})
-		case recipe.Multi:
-			multiRecipes = append(multiRecipes, protocol.MultiRecipe{
-				UUID:            i.UUID(),
-				RecipeNetworkID: networkID,
-			})
 		case recipe.Shaped:
 			shapedRecipes = append(shapedRecipes, protocol.ShapedRecipe{
 				RecipeID:        uuid.New().String(),
@@ -160,7 +144,6 @@ func (s *Session) sendRecipes() {
 				Input:           stacksToIngredientItems(s.br, i.Input()),
 				Output:          stacksToRecipeStacks(s.br, i.Output()),
 				Block:           i.Block(),
-				AssumeSymmetry:  true,
 				RecipeNetworkID: networkID,
 			})
 		case recipe.SmithingTransform:
@@ -213,8 +196,6 @@ func (s *Session) sendRecipes() {
 	s.writePacket(&packet.CraftingData{
 		ShapedRecipes:                shapedRecipes,
 		ShapelessRecipes:             shapelessRecipes,
-		MultiRecipes:                 multiRecipes,
-		UserDataShapelessRecipes:     userDataShapelessRecipes,
 		SmithingTransformRecipes:     smithingTransformRecipes,
 		SmithingTrimRecipes:          smithingTrimRecipes,
 		PotionRecipes:                potionRecipes,
@@ -1326,6 +1307,9 @@ func debugShapeToProtocol(shape debug.Shape, dim world.Dimension, attachedEntity
 func gameTypeFromMode(mode world.GameMode) int32 {
 	if mode.AllowsFlying() && mode.CreativeInventory() {
 		return packet.GameTypeCreative
+	}
+	if !mode.Visible() && !mode.HasCollision() {
+		return packet.GameTypeSpectator
 	}
 	return packet.GameTypeSurvival
 }

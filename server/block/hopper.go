@@ -55,8 +55,6 @@ func NewHopper() Hopper {
 	}
 }
 
-func (Hopper) ContainerSize() int { return 5 }
-
 // Model ...
 func (Hopper) Model() world.BlockModel {
 	return model.Hopper{}

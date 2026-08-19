@@ -4,6 +4,11 @@
 .vscode/
 
 # Dragonfly
-/world/
+/worlds/
 /players/
 /resources/
+/plugins/
+
+/db/
+/templates/
+/.gocache/

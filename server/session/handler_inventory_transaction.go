@@ -122,6 +122,9 @@ func (h *InventoryTransactionHandler) handleNormalTransaction(pk *packet.Invento
 	if !expected.Equal(actual) {
 		return fmt.Errorf("different item thrown than held in slot: %#v was thrown but held %#v", expected, actual)
 	}
+	if item.IsInventoryBound(actual.Item()) {
+		return fmt.Errorf("%w: item cannot be dropped", errInventoryBoundAction)
+	}
 
 	// Explicitly don't re-use the thrown variable. This item was supplied by the user, and if some
 	// logic in the Comparable() method was flawed, users would be able to cheat with item properties.

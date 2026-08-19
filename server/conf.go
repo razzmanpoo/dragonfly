@@ -195,7 +195,6 @@ func (conf Config) New() *Server {
 		l, err := lf(conf)
 		if err != nil {
 			conf.Log.Error("create listener: " + err.Error())
-			continue
 		}
 		srv.listeners = append(srv.listeners, l)
 	}

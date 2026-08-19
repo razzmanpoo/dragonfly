@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"math"
 
@@ -101,7 +102,9 @@ func (h PlayerAuthInputHandler) handleActions(pk *packet.PlayerAuthInput, s *Ses
 		if err := sh.handleRequest(request, s, tx, c); err != nil {
 			// Item stacks being out of sync isn't uncommon, so don't error. Just debug the error and let the
 			// revert do its work.
-			s.conf.Log.Debug("process packet: PlayerAuthInput: resolve item stack request: " + err.Error())
+			if !errors.Is(err, errInventoryBoundAction) {
+				s.conf.Log.Debug("process packet: PlayerAuthInput: resolve item stack request: " + err.Error())
+			}
 		}
 	}
 	return nil

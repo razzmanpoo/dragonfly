@@ -127,3 +127,14 @@ type Controllable interface {
 
 	UpdateDiagnostics(Diagnostics)
 }
+
+// PlayerModel is an entity that should be rendered with the Bedrock player
+// model without being controlled by a Session. NPCs implement this interface
+// so they can look like players without entering the player/session system.
+type PlayerModel interface {
+	world.Entity
+	Name() string
+	UUID() uuid.UUID
+	Skin() skin.Skin
+	GameMode() world.GameMode
+}

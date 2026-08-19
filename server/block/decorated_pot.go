@@ -33,8 +33,6 @@ type DecoratedPot struct {
 	Decorations [4]PotDecoration
 }
 
-func (DecoratedPot) ContainerSize() int { return 1 }
-
 // SideClosed ...
 func (p DecoratedPot) SideClosed(cube.Pos, cube.Pos, *world.Tx) bool {
 	return false

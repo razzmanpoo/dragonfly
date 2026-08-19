@@ -33,6 +33,21 @@ type Stack struct {
 	enchantments map[EnchantmentType]Enchantment
 }
 
+// InventoryBound marks an item that must remain in the player's own inventory.
+// Inventory-bound items may still be moved between slots in that inventory.
+type InventoryBound interface {
+	InventoryBound()
+}
+
+// IsInventoryBound reports whether an item is bound to the player's inventory.
+func IsInventoryBound(it world.Item) bool {
+	if it == nil {
+		return false
+	}
+	_, ok := it.(InventoryBound)
+	return ok
+}
+
 // NewStack returns a new stack using the item type and the count passed. NewStack panics if the count passed
 // is negative or if the item type passed is nil.
 func NewStack(t world.Item, count int) Stack {

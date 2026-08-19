@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"github.com/df-mc/dragonfly/server/block"
 	"github.com/df-mc/dragonfly/server/entity"
@@ -13,6 +14,8 @@ import (
 	"math"
 	"time"
 )
+
+var errInventoryBoundAction = errors.New("inventory-bound item action rejected")
 
 // ItemStackRequestHandler handles the ItemStackRequest packet. It handles the actions done within the
 // inventory.
@@ -54,7 +57,9 @@ func (h *ItemStackRequestHandler) Handle(p packet.Packet, s *Session, tx *world.
 		if err := h.handleRequest(req, s, tx, c); err != nil {
 			// Item stacks being out of sync isn't uncommon, so don't error. Just debug the error and let the
 			// revert do its work.
-			s.conf.Log.Debug("process packet: ItemStackRequest: resolve item stack request: " + err.Error())
+			if !errors.Is(err, errInventoryBoundAction) {
+				s.conf.Log.Debug("process packet: ItemStackRequest: resolve item stack request: " + err.Error())
+			}
 		}
 	}
 	return nil
@@ -162,6 +167,10 @@ func (h *ItemStackRequestHandler) handleTransfer(from, to protocol.StackRequestS
 
 	invA, _ := s.invByID(int32(from.Container.ContainerID), tx)
 	invB, _ := s.invByID(int32(to.Container.ContainerID), tx)
+	fromContainer, toContainer := int32(from.Container.ContainerID), int32(to.Container.ContainerID)
+	if item.IsInventoryBound(i.Item()) && inventoryBoundContainer(fromContainer) && !inventoryBoundContainer(toContainer) {
+		return fmt.Errorf("%w: item cannot leave the player's inventory", errInventoryBoundAction)
+	}
 
 	ctx := event.C(inventory.Holder(c))
 	_ = call(ctx, int(from.Slot), i.Grow(int(count)-i.Count()), invA.Handler().HandleTake)
@@ -186,6 +195,11 @@ func (h *ItemStackRequestHandler) handleSwap(a *protocol.SwapStackRequestAction,
 
 	invA, _ := s.invByID(int32(a.Source.Container.ContainerID), tx)
 	invB, _ := s.invByID(int32(a.Destination.Container.ContainerID), tx)
+	fromContainer, toContainer := int32(a.Source.Container.ContainerID), int32(a.Destination.Container.ContainerID)
+	if (item.IsInventoryBound(i.Item()) && inventoryBoundContainer(fromContainer) && !inventoryBoundContainer(toContainer)) ||
+		(item.IsInventoryBound(dest.Item()) && inventoryBoundContainer(toContainer) && !inventoryBoundContainer(fromContainer)) {
+		return fmt.Errorf("%w: item cannot leave the player's inventory", errInventoryBoundAction)
+	}
 
 	ctx := event.C(inventory.Holder(c))
 	_ = call(ctx, int(a.Source.Slot), i, invA.Handler().HandleTake)
@@ -230,6 +244,10 @@ func (h *ItemStackRequestHandler) handleDestroy(a *protocol.DestroyStackRequestA
 	if i.Count() < int(a.Count) {
 		return fmt.Errorf("client attempted to destroy %v items, but only %v present", a.Count, i.Count())
 	}
+	inv, _ := s.invByID(int32(a.Source.Container.ContainerID), tx)
+	if inv == s.inv && item.IsInventoryBound(i.Item()) {
+		return fmt.Errorf("%w: item cannot be destroyed", errInventoryBoundAction)
+	}
 
 	h.setItemInSlot(a.Source, i.Grow(-int(a.Count)), s, tx)
 	return nil
@@ -247,6 +265,9 @@ func (h *ItemStackRequestHandler) handleDrop(a *protocol.DropStackRequestAction,
 	}
 
 	inv, _ := s.invByID(int32(a.Source.Container.ContainerID), tx)
+	if inv == s.inv && item.IsInventoryBound(i.Item()) {
+		return fmt.Errorf("%w: item cannot be dropped", errInventoryBoundAction)
+	}
 	if err := call(event.C(inventory.Holder(c)), int(a.Source.Slot), i.Grow(int(a.Count)-i.Count()), inv.Handler().HandleDrop); err != nil {
 		return err
 	}
@@ -254,6 +275,21 @@ func (h *ItemStackRequestHandler) handleDrop(a *protocol.DropStackRequestAction,
 	n := c.Drop(i.Grow(int(a.Count) - i.Count()))
 	h.setItemInSlot(a.Source, i.Grow(-n), s, tx)
 	return nil
+}
+
+// inventoryBoundContainer includes the player's main inventory and the
+// temporary cursor used while moving items between the player's own slots.
+// Crafting/container/armour slots are deliberately excluded.
+func inventoryBoundContainer(id int32) bool {
+	switch id {
+	case protocol.ContainerHotBar,
+		protocol.ContainerInventory,
+		protocol.ContainerCombinedHotBarAndInventory,
+		protocol.ContainerCursor:
+		return true
+	default:
+		return false
+	}
 }
 
 // handleMineBlock handles the action associated with a block being mined by the player. This seems to be a workaround

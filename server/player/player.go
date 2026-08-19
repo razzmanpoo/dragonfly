@@ -953,13 +953,27 @@ func (p *Player) dropItems() {
 	p.session().SendExperience(p.ExperienceLevel(), p.ExperienceProgress())
 
 	p.MoveItemsToInventory()
-	for _, it := range append(p.inv.Clear(), append(p.armour.Clear(), p.offHand.Clear()...)...) {
+	items := append(clearDroppableInventory(p.inv), clearDroppableInventory(p.armour.Inventory())...)
+	items = append(items, clearDroppableInventory(p.offHand)...)
+	for _, it := range items {
 		if _, ok := it.Enchantment(enchantment.CurseOfVanishing); ok {
 			continue
 		}
 		opts := world.EntitySpawnOpts{Position: pos, Velocity: mgl64.Vec3{rand.Float64()*0.2 - 0.1, 0.2, rand.Float64()*0.2 - 0.1}}
 		p.tx.AddEntity(entity.NewItem(opts, it))
 	}
+}
+
+func clearDroppableInventory(inv *inventory.Inventory) []item.Stack {
+	items := make([]item.Stack, 0, inv.Size())
+	for slot, stack := range inv.Slots() {
+		if stack.Empty() || item.IsInventoryBound(stack.Item()) {
+			continue
+		}
+		_ = inv.SetItem(slot, item.Stack{})
+		items = append(items, stack)
+	}
+	return items
 }
 
 // MoveItemsToInventory moves items kept in 'temporary' slots, such as the
@@ -1928,7 +1942,12 @@ func (p *Player) AttackEntity(e world.Entity) bool {
 
 	p.Exhaust(0.1)
 
-	living.KnockBack(p.Position(), force, height)
+	// Handlers may set both values to zero when they provide custom
+	// knockback. In that case, skip Dragonfly's default knockback entirely so
+	// it cannot reset or combine with the custom velocity.
+	if force != 0 || height != 0 {
+		living.KnockBack(p.Position(), force, height)
+	}
 
 	if f, ok := i.Enchantment(enchantment.FireAspect); ok {
 		if flammable, ok := living.(entity.Flammable); ok {
@@ -2585,6 +2604,9 @@ func (p *Player) mendItems(xp int) int {
 // The number of items that was dropped in the end is returned. It is generally the count of the stack passed
 // or 0 if dropping the item.Stack was cancelled.
 func (p *Player) Drop(s item.Stack) int {
+	if item.IsInventoryBound(s.Item()) {
+		return 0
+	}
 	ctx := NewEventContext(p.tx, p)
 	if p.Handler().HandleItemDrop(ctx, s); ctx.Cancelled() {
 		return 0

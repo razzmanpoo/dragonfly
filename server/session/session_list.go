@@ -106,6 +106,22 @@ func (l *sessionList) unsendSessionFrom(s, from *Session) {
 
 // skinToProtocol converts a skin to its protocol representation.
 func skinToProtocol(s skin.Skin) protocol.Skin {
+	modelConfig := s.ModelConfig
+	model := s.Model
+	if s.Bounds().Dx() == 0 || s.Bounds().Dy() == 0 {
+		s = skin.New(64, 32)
+		for i := 3; i < len(s.Pix); i += 4 {
+			s.Pix[i] = 255
+		}
+	}
+
+	if modelConfig.Default == "" {
+		modelConfig.Default = "geometry.humanoid.custom"
+	}
+	if len(model) == 0 {
+		model = defaultSkinGeometry
+	}
+
 	var animations []protocol.SkinAnimation
 	for _, animation := range s.Animations {
 		protocolAnim := protocol.SkinAnimation{
@@ -130,14 +146,10 @@ func skinToProtocol(s skin.Skin) protocol.Skin {
 	if fullID == "" {
 		fullID = uuid.New().String()
 	}
-	model := s.Model
-	if len(model) == 0 {
-		model = []byte("{}")
-	}
 	return protocol.Skin{
 		PlayFabID:                 s.PlayFabID,
 		SkinID:                    uuid.New().String(),
-		SkinResourcePatch:         s.ModelConfig.Encode(),
+		SkinResourcePatch:         modelConfig.Encode(),
 		SkinImageWidth:            uint32(s.Bounds().Max.X),
 		SkinImageHeight:           uint32(s.Bounds().Max.Y),
 		SkinData:                  s.Pix,

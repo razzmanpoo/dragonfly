@@ -63,7 +63,8 @@ type playerData struct {
 	sleeping bool
 	sleepPos cube.Pos
 
-	usingSince time.Time
+	usingSince     time.Time
+	usingStartTick int64
 
 	glideTicks   int64
 	fireTicks    int64
@@ -1597,7 +1598,7 @@ func (p *Player) UseItem() {
 		if !p.canRelease() {
 			return
 		}
-		p.usingSince, p.usingItem = time.Now(), true
+		p.usingSince, p.usingItem, p.usingStartTick = time.Now(), true, p.tx.CurrentTick()
 		p.updateState()
 	}
 	switch usable := it.(type) {
@@ -1633,66 +1634,112 @@ func (p *Player) UseItem() {
 		p.addNewItem(useCtx)
 	case item.Consumable:
 		if c, ok := usable.(interface{ CanConsume() bool }); ok && !c.CanConsume() {
-			p.ReleaseItem()
+			p.stopUsingItem()
 			return
 		}
 		if !usable.AlwaysConsumable() && p.GameMode().AllowsTakingDamage() && p.Food() >= 20 {
 			// The item.Consumable is not always consumable, the player is not in creative mode and the
 			// food bar is filled: The item cannot be consumed.
-			p.ReleaseItem()
+			p.stopUsingItem()
 			return
 		}
 		if !p.usingItem {
 			// Consumable starts being consumed: Set the start timestamp and update the using state to viewers.
-			p.usingItem, p.usingSince = true, time.Now()
+			p.usingItem, p.usingSince, p.usingStartTick = true, time.Now(), p.tx.CurrentTick()
 			p.updateState()
 			return
 		}
 		// The player is currently using the item held. This is a signal the item was consumed, so we
-		// consume it and start using it again.
-		useCtx, dur := p.useContext(), p.useDuration()
-		if dur < usable.ConsumeDuration() {
-			// The required duration for consuming this item was not met, so we don't consume it.
+		// consume it and stop using it. The client starts the next use separately, preserving the
+		// short pause between consecutive items present in vanilla.
+		useCtx := p.useContext()
+		if p.tx.CurrentTick()-p.usingStartTick < consumeDurationTicks(usable.ConsumeDuration()) {
+			// The required duration for consuming this item was not met, so we don't consume it yet.
+			// Keep the use active so an early completion signal cannot start a new use and interrupt
+			// the current eating animation.
 			return
 		}
-		// Reset the duration for the next item to be consumed.
-		p.usingSince = time.Now()
 		ctx := NewEventContext(p.tx, p)
 		if p.Handler().HandleItemConsume(ctx, i); ctx.Cancelled() {
+			p.stopUsingItem()
 			return
 		}
+		p.stopUsingItem()
 		useCtx.CountSub, useCtx.NewItem = 1, usable.Consume(p.tx, p)
 		p.handleUseContext(useCtx)
 		p.tx.PlaySound(p.Position().Add(mgl64.Vec3{0, 1.5}), sound.Burp{})
 	}
 }
 
-// ReleaseItem makes the Player release the item it is currently using. This is only applicable for items that
-// implement the item.Releasable interface.
+// ReleaseItem makes the Player release the item it is currently using. This is applicable for items that implement
+// the item.Releasable or item.Consumable interface.
 // If the Player is not currently using any item, ReleaseItem returns immediately.
 // ReleaseItem either aborts the using of the item or finished it, depending on the time that elapsed since
 // the item started being used.
 func (p *Player) ReleaseItem() {
-	if !p.usingItem || !p.canRelease() || !p.GameMode().AllowsInteraction() {
-		p.usingItem = false
+	if !p.usingItem {
 		return
 	}
+	if !p.canRelease() || !p.GameMode().AllowsInteraction() {
+		p.stopUsingItem()
+		return
+	}
+	usingStartTick := p.usingStartTick
 	p.usingItem = false
+	p.usingStartTick = 0
 
 	useCtx, dur := p.useContext(), p.useDuration()
 	i, _ := p.HeldItems()
-	ctx := NewEventContext(p.tx, p)
-	if p.Handler().HandleItemRelease(ctx, i, dur); ctx.Cancelled() {
+	switch it := i.Item().(type) {
+	case item.Releasable:
+		ctx := NewEventContext(p.tx, p)
+		if p.Handler().HandleItemRelease(ctx, i, dur); ctx.Cancelled() {
+			p.updateState()
+			return
+		}
+		it.Release(p, p.tx, useCtx, dur)
+	case item.Consumable:
+		if p.tx.CurrentTick()-usingStartTick < consumeDurationTicks(it.ConsumeDuration()) {
+			// The required duration for consuming this item was not met, so we don't consume it.
+			p.updateState()
+			return
+		}
+		if c, ok := it.(interface{ CanConsume() bool }); ok && !c.CanConsume() {
+			p.updateState()
+			return
+		}
+		if !it.AlwaysConsumable() && p.GameMode().AllowsTakingDamage() && p.Food() >= 20 {
+			p.updateState()
+			return
+		}
+		ctx := NewEventContext(p.tx, p)
+		if p.Handler().HandleItemConsume(ctx, i); ctx.Cancelled() {
+			p.updateState()
+			return
+		}
+		useCtx.CountSub, useCtx.NewItem = 1, it.Consume(p.tx, p)
+		p.tx.PlaySound(p.Position().Add(mgl64.Vec3{0, 1.5}), sound.Burp{})
+	}
+	p.handleUseContext(useCtx)
+	p.updateState()
+}
+
+// stopUsingItem stops the player's current use action and informs viewers of the state change.
+func (p *Player) stopUsingItem() {
+	if !p.usingItem {
 		return
 	}
-	i.Item().(item.Releasable).Release(p, p.tx, useCtx, dur)
-	p.handleUseContext(useCtx)
+	p.usingItem = false
+	p.usingStartTick = 0
 	p.updateState()
 }
 
 // canRelease returns whether the player can release the item currently held in the main hand.
 func (p *Player) canRelease() bool {
 	held, left := p.HeldItems()
+	if _, consumable := held.Item().(item.Consumable); consumable {
+		return true
+	}
 	releasable, ok := held.Item().(item.Releasable)
 	if !ok {
 		return false
@@ -1744,6 +1791,12 @@ func (p *Player) handleUseContext(ctx *item.UseContext) {
 // useDuration returns the duration the player has been using the item in the main hand.
 func (p *Player) useDuration() time.Duration {
 	return time.Since(p.usingSince) + time.Second/20
+}
+
+// consumeDurationTicks returns the number of world ticks required to consume an item.
+func consumeDurationTicks(duration time.Duration) int64 {
+	const tickDuration = time.Second / 20
+	return int64((duration + tickDuration - 1) / tickDuration)
 }
 
 // UsingItem checks if the Player is currently using an item. True is returned if the Player is currently eating an

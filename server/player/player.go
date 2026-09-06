@@ -1650,8 +1650,8 @@ func (p *Player) UseItem() {
 			return
 		}
 		// The player is currently using the item held. This is a signal the item was consumed, so we
-		// consume it and stop using it. The client starts the next use separately, preserving the
-		// short pause between consecutive items present in vanilla.
+		// consume it and reset the use duration for the next item. Keep the use state active between
+		// consecutive items so the client does not briefly leave and re-enter the eating animation.
 		useCtx := p.useContext()
 		if p.tx.CurrentTick()-p.usingStartTick < consumeDurationTicks(usable.ConsumeDuration()) {
 			// The required duration for consuming this item was not met, so we don't consume it yet.
@@ -1664,9 +1664,11 @@ func (p *Player) UseItem() {
 			p.stopUsingItem()
 			return
 		}
-		p.stopUsingItem()
 		useCtx.CountSub, useCtx.NewItem = 1, usable.Consume(p.tx, p)
 		p.handleUseContext(useCtx)
+		// The player remains in the using state while holding the button. Reset the start tick after
+		// consuming so the next item still has to be used for its full duration.
+		p.usingSince, p.usingStartTick = time.Now(), p.tx.CurrentTick()
 		p.tx.PlaySound(p.Position().Add(mgl64.Vec3{0, 1.5}), sound.Burp{})
 	}
 }
